@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: unisphere
+    env: node
+    buildCommand: npm install && npm run build:render
+    startCommand: node dist/server/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: NPM_CONFIG_PRODUCTION
+        value: false
+      - key: VITE_API_URL
+        value: https://sdsy2.onrender.com
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGIN
+        value: https://sdsy2.onrender.com
+    healthCheckPath: /api/health
+    autoDeploy: true 

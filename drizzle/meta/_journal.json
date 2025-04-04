@@ -1,0 +1,20 @@
+{"version":"5","dialect":"pg","entries":[
+  {
+    "id": "0000_initial",
+    "checksum": "21dddb36a4b41d7afb83ee5830a5e0f4df8b27b0fbd49dbc03ac6809e5b69dd4",
+    "operations": [
+      {
+        "addTable": "users,programs,courses,years,semesters,groups,units,contents,comments,user_contents,dashboard_messages"
+      }
+    ]
+  },
+  {
+    "id": "0001_session",
+    "checksum": "4e1ffc26ffd4f01b1dc87270f0edf11d63cd7e77199d31bad562fb3d42930591",
+    "operations": [
+      {
+        "addTable": "session"
+      }
+    ]
+  }
+]}

@@ -1,0 +1,1272 @@
+import { 
+  User, InsertUser, Country, InsertCountry, University, InsertUniversity,
+  Program, InsertProgram, Course, InsertCourse, Year, InsertYear,
+  Semester, InsertSemester, Group, InsertGroup,
+  Unit, InsertUnit, Content, InsertContent, Comment, InsertComment,
+  DashboardMessage, InsertDashboardMessage,
+  users, contents, comments, userContents, dashboardMessages,
+  countries, universities, programs, courses, years, semesters, groups, units
+} from "@shared/schema";
+import session from "express-session";
+import createMemoryStore from "memorystore";
+import { db } from "./db";
+import { and, eq, desc, asc, sql, gt, lt, gte, lte, isNull, not } from "drizzle-orm";
+import connectPg from "connect-pg-simple";
+import pg from "pg";
+const { Pool } = pg;
+
+const MemoryStore = createMemoryStore(session);
+const PostgresSessionStore = connectPg(session);
+
+// Create postgres pool for session store
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL
+});
+
+// Define type for user-content relation
+type UserContent = {
+  userId: number;
+  contentId: number;
+  isCompleted: boolean;
+  completedAt?: Date | null;
+  isLiked: boolean;
+  isDisliked: boolean;
+};
+
+// Define type for user statistics
+type UserStats = {
+  totalPoints: number;
+  rank: number;
+  badge: string;
+  totalContributions: number;
+  contributionBreakdown: {
+    assignments: number;
+    notes: number;
+    pastPapers: number;
+  };
+};
+
+// Define type for leaderboard entry
+type LeaderboardEntry = User & {
+  totalContributions: number;
+  badge: string;
+};
+
+export interface IStorage {
+  // Session store
+  sessionStore: any; // session.Store type
+
+  // User operations
+  getUser(id: number): Promise<User | undefined>;
+  getUserByUsername(username: string): Promise<User | undefined>;
+  getUserByAdmissionNumber(admissionNumber: string): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
+  updateUser(id: number, data: Partial<User>): Promise<User>;
+  updateUserPoints(id: number, points: number): Promise<User>;
+  getUserStats(id: number): Promise<UserStats>;
+
+  // Academic hierarchy operations
+  getCountries(): Promise<Country[]>;
+  getCountry(id: number): Promise<Country | undefined>;
+  createCountry(country: InsertCountry): Promise<Country>;
+  
+  getUniversities(countryId?: number): Promise<University[]>;
+  getUniversity(id: number): Promise<University | undefined>;
+  createUniversity(university: InsertUniversity): Promise<University>;
+  
+  getPrograms(universityId?: number): Promise<Program[]>;
+  getAllPrograms(): Promise<Program[]>;
+  getProgram(id: number): Promise<Program | undefined>;
+  createProgram(program: InsertProgram): Promise<Program>;
+  
+  getCourses(programId?: number): Promise<Course[]>;
+  getCourse(id: number): Promise<Course | undefined>;
+  createCourse(course: InsertCourse): Promise<Course>;
+  
+  getYears(courseId?: number): Promise<Year[]>;
+  getYear(id: number): Promise<Year | undefined>;
+  createYear(year: InsertYear): Promise<Year>;
+  
+  getSemesters(yearId?: number): Promise<Semester[]>;
+  getSemester(id: number): Promise<Semester | undefined>;
+  createSemester(semester: InsertSemester): Promise<Semester>;
+  
+  getGroups(semesterId?: number): Promise<Group[]>;
+  getGroup(id: number): Promise<Group | undefined>;
+  createGroup(group: InsertGroup): Promise<Group>;
+  
+  getUnits(groupId?: number): Promise<Unit[]>;
+  getUnit(id: number): Promise<Unit | undefined>;
+  getUnitsByUser(userId: number): Promise<Unit[]>;
+  createUnit(unit: InsertUnit): Promise<Unit>;
+
+  // Content operations
+  getContents(unitId: number, type?: string): Promise<Content[]>;
+  getContent(id: number): Promise<Content | undefined>;
+  createContent(content: InsertContent): Promise<Content>;
+  updateContentLikes(id: number, likeDelta: number, dislikeDelta: number): Promise<Content>;
+
+  // User-Content relation operations
+  getUserContent(userId: number, contentId: number): Promise<UserContent | undefined>;
+  updateUserContent(userId: number, contentId: number, data: Partial<UserContent>): Promise<UserContent>;
+
+  // Comment operations
+  getComments(contentId: number): Promise<(Comment & { user: User })[]>;
+  createComment(comment: InsertComment): Promise<Comment>;
+
+  // Leaderboard
+  getLeaderboard(): Promise<LeaderboardEntry[]>;
+  
+  // Dashboard messages
+  getDashboardMessages(): Promise<DashboardMessage[]>;
+  createDashboardMessage(message: InsertDashboardMessage): Promise<DashboardMessage>;
+  updateDashboardMessage(id: number, data: Partial<DashboardMessage>): Promise<DashboardMessage>;
+}
+
+export class MemStorage implements IStorage {
+  // Memory stores
+  private users: Map<number, User>;
+  private countries: Map<number, Country>;
+  private universities: Map<number, University>;
+  private programs: Map<number, Program>;
+  private courses: Map<number, Course>;
+  private years: Map<number, Year>;
+  private semesters: Map<number, Semester>;
+  private groups: Map<number, Group>;
+  private units: Map<number, Unit>;
+  private contents: Map<number, Content>;
+  private userContents: Map<string, UserContent>;
+  private comments: Map<number, Comment>;
+  private dashboardMessages: Map<number, DashboardMessage>;
+  
+  // Current IDs for auto-increment
+  private userId: number;
+  private countryId: number;
+  private universityId: number;
+  private programId: number;
+  private courseId: number;
+  private yearId: number;
+  private semesterId: number;
+  private groupId: number;
+  private unitId: number;
+  private contentId: number;
+  private commentId: number;
+  private dashboardMessageId: number;
+
+  // Session store
+  public sessionStore: any;
+
+  constructor() {
+    this.users = new Map();
+    this.countries = new Map();
+    this.universities = new Map();
+    this.programs = new Map();
+    this.courses = new Map();
+    this.years = new Map();
+    this.semesters = new Map();
+    this.groups = new Map();
+    this.units = new Map();
+    this.contents = new Map();
+    this.userContents = new Map();
+    this.comments = new Map();
+    this.dashboardMessages = new Map();
+
+    this.userId = 1;
+    this.countryId = 1;
+    this.universityId = 1;
+    this.programId = 1;
+    this.courseId = 1;
+    this.yearId = 1;
+    this.semesterId = 1;
+    this.groupId = 1;
+    this.unitId = 1;
+    this.contentId = 1;
+    this.commentId = 1;
+    this.dashboardMessageId = 1;
+
+    this.sessionStore = new MemoryStore({
+      checkPeriod: 86400000, // 24h
+    });
+  }
+
+  // User operations
+  async getUser(id: number): Promise<User | undefined> {
+    return this.users.get(id);
+  }
+
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    return Array.from(this.users.values()).find(
+      (user) => user.username.toLowerCase() === username.toLowerCase(),
+    );
+  }
+
+  async getUserByAdmissionNumber(admissionNumber: string): Promise<User | undefined> {
+    return Array.from(this.users.values()).find(
+      (user) => user.admissionNumber.toLowerCase() === admissionNumber.toLowerCase(),
+    );
+  }
+
+  async createUser(insertUser: InsertUser): Promise<User> {
+    const id = this.userId++;
+    const now = new Date();
+    
+    // Ensure user has all required properties
+    const user: User = { 
+      ...insertUser, 
+      id, 
+      points: 0,
+      isAdmin: false, 
+      isSuperAdmin: false,
+      countryId: insertUser.countryId || 0,
+      universityId: insertUser.universityId || 0,
+      programId: insertUser.programId || 0,
+      courseId: insertUser.courseId || 0,
+      yearId: insertUser.yearId || 0,
+      semesterId: insertUser.semesterId || 0,
+      groupId: insertUser.groupId || 0,
+      profilePicture: insertUser.profilePicture || null,
+      isUsingDefaultPassword: insertUser.isUsingDefaultPassword !== undefined 
+        ? insertUser.isUsingDefaultPassword
+        : true,
+      createdAt: now,
+      lastActiveAt: now
+    };
+    
+    this.users.set(id, user);
+    return user;
+  }
+
+  async updateUser(id: number, data: Partial<User>): Promise<User> {
+    const user = await this.getUser(id);
+    if (!user) {
+      throw new Error(`User with id ${id} not found`);
+    }
+
+    const updatedUser = { ...user, ...data };
+    this.users.set(id, updatedUser);
+    return updatedUser;
+  }
+
+  async updateUserPoints(id: number, points: number): Promise<User> {
+    const user = await this.getUser(id);
+    if (!user) {
+      throw new Error(`User with id ${id} not found`);
+    }
+
+    const updatedUser = { 
+      ...user, 
+      points: Math.max(0, user.points + points) 
+    };
+    this.users.set(id, updatedUser);
+    return updatedUser;
+  }
+
+  async getUserStats(id: number): Promise<UserStats> {
+    const user = await this.getUser(id);
+    if (!user) {
+      throw new Error(`User with id ${id} not found`);
+    }
+
+    // Get contents uploaded by user
+    const userContents = Array.from(this.contents.values()).filter(
+      (content) => content.uploaderId === id
+    );
+
+    // Calculate contribution breakdown
+    const assignments = userContents.filter(c => c.type === "assignment").length;
+    const notes = userContents.filter(c => c.type === "note").length;
+    const pastPapers = userContents.filter(c => c.type === "past_paper").length;
+
+    // Calculate rank
+    const sortedUsers = Array.from(this.users.values())
+      .sort((a, b) => b.points - a.points);
+    
+    const rank = sortedUsers.findIndex(u => u.id === id) + 1;
+
+    // Determine badge based on points
+    let badge = "Starlet Scholar";
+    if (user.points > 4000) badge = "Celestial Champion";
+    else if (user.points > 2500) badge = "Phoenix Prodigy";
+    else if (user.points > 1500) badge = "Eternal Guardian";
+    else if (user.points > 1000) badge = "Cosmic Intellect";
+    else if (user.points > 750) badge = "Galactic Sage";
+    else if (user.points > 500) badge = "Truth Hunter";
+    else if (user.points > 300) badge = "Wisdom Weaver";
+    else if (user.points > 150) badge = "Insight Voyager";
+    else if (user.points > 50) badge = "Knowledge Keeper";
+
+    return {
+      totalPoints: user.points,
+      rank,
+      badge,
+      totalContributions: userContents.length,
+      contributionBreakdown: {
+        assignments,
+        notes,
+        pastPapers
+      }
+    };
+  }
+
+  // Country operations
+  async getCountries(): Promise<Country[]> {
+    return Array.from(this.countries.values());
+  }
+
+  async getCountry(id: number): Promise<Country | undefined> {
+    return this.countries.get(id);
+  }
+
+  async createCountry(country: InsertCountry): Promise<Country> {
+    const id = this.countryId++;
+    const newCountry: Country = { ...country, id };
+    this.countries.set(id, newCountry);
+    return newCountry;
+  }
+
+  // University operations
+  async getUniversities(countryId?: number): Promise<University[]> {
+    let universities = Array.from(this.universities.values());
+    if (countryId) {
+      universities = universities.filter(uni => uni.countryId === countryId);
+    }
+    return universities;
+  }
+
+  async getUniversity(id: number): Promise<University | undefined> {
+    return this.universities.get(id);
+  }
+
+  async createUniversity(university: InsertUniversity): Promise<University> {
+    const id = this.universityId++;
+    const newUniversity: University = { ...university, id };
+    this.universities.set(id, newUniversity);
+    return newUniversity;
+  }
+
+  // Program operations
+  async getPrograms(universityId?: number): Promise<Program[]> {
+    let programs = Array.from(this.programs.values());
+    if (universityId) {
+      programs = programs.filter(program => program.universityId === universityId);
+    }
+    return programs;
+  }
+
+  async getAllPrograms(): Promise<Program[]> {
+    return Array.from(this.programs.values());
+  }
+
+  async getProgram(id: number): Promise<Program | undefined> {
+    return this.programs.get(id);
+  }
+
+  async createProgram(program: InsertProgram): Promise<Program> {
+    const id = this.programId++;
+    const newProgram: Program = { ...program, id };
+    this.programs.set(id, newProgram);
+    return newProgram;
+  }
+
+  // Course operations
+  async getCourses(programId?: number): Promise<Course[]> {
+    let courses = Array.from(this.courses.values());
+    if (programId) {
+      courses = courses.filter(course => course.programId === programId);
+    }
+    return courses;
+  }
+
+  async getCourse(id: number): Promise<Course | undefined> {
+    return this.courses.get(id);
+  }
+
+  async createCourse(course: InsertCourse): Promise<Course> {
+    const id = this.courseId++;
+    const newCourse: Course = { ...course, id };
+    this.courses.set(id, newCourse);
+    return newCourse;
+  }
+
+  // Year operations
+  async getYears(courseId?: number): Promise<Year[]> {
+    let years = Array.from(this.years.values());
+    if (courseId) {
+      years = years.filter(year => year.courseId === courseId);
+    }
+    return years;
+  }
+
+  async getYear(id: number): Promise<Year | undefined> {
+    return this.years.get(id);
+  }
+
+  async createYear(year: InsertYear): Promise<Year> {
+    const id = this.yearId++;
+    const newYear: Year = { ...year, id };
+    this.years.set(id, newYear);
+    return newYear;
+  }
+
+  // Semester operations
+  async getSemesters(yearId?: number): Promise<Semester[]> {
+    let semesters = Array.from(this.semesters.values());
+    if (yearId) {
+      semesters = semesters.filter(semester => semester.yearId === yearId);
+    }
+    return semesters;
+  }
+
+  async getSemester(id: number): Promise<Semester | undefined> {
+    return this.semesters.get(id);
+  }
+
+  async createSemester(semester: InsertSemester): Promise<Semester> {
+    const id = this.semesterId++;
+    const newSemester: Semester = { ...semester, id };
+    this.semesters.set(id, newSemester);
+    return newSemester;
+  }
+
+  // Group operations
+  async getGroups(semesterId?: number): Promise<Group[]> {
+    let groups = Array.from(this.groups.values());
+    if (semesterId) {
+      groups = groups.filter(group => group.semesterId === semesterId);
+    }
+    return groups;
+  }
+
+  async getGroup(id: number): Promise<Group | undefined> {
+    return this.groups.get(id);
+  }
+
+  async createGroup(group: InsertGroup): Promise<Group> {
+    const id = this.groupId++;
+    const newGroup: Group = { 
+      ...group, 
+      id,
+      adminId: null // Add default admin for the group
+    };
+    this.groups.set(id, newGroup);
+    return newGroup;
+  }
+
+  // Unit operations
+  async getUnits(groupId?: number): Promise<Unit[]> {
+    let units = Array.from(this.units.values());
+    if (groupId) {
+      units = units.filter(unit => unit.groupId === groupId);
+    }
+    return units;
+  }
+
+  async getUnit(id: number): Promise<Unit | undefined> {
+    return this.units.get(id);
+  }
+
+  async getUnitsByUser(userId: number): Promise<Unit[]> {
+    const user = await this.getUser(userId);
+    if (!user) {
+      throw new Error(`User with id ${userId} not found`);
+    }
+
+    // Get units for user's group
+    return this.getUnits(user.groupId);
+  }
+
+  async createUnit(unit: InsertUnit): Promise<Unit> {
+    const id = this.unitId++;
+    const newUnit: Unit = { ...unit, id };
+    this.units.set(id, newUnit);
+    return newUnit;
+  }
+
+  // Content operations
+  async getContents(unitId: number, type?: string): Promise<Content[]> {
+    let contents = Array.from(this.contents.values())
+      .filter(content => content.unitId === unitId);
+    
+    if (type) {
+      contents = contents.filter(content => content.type === type);
+    }
+    
+    // Sort by upload date, newest first
+    return contents.sort((a, b) => 
+      new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
+    );
+  }
+
+  async getContent(id: number): Promise<Content | undefined> {
+    return this.contents.get(id);
+  }
+
+  async createContent(content: InsertContent): Promise<Content> {
+    const id = this.contentId++;
+    const now = new Date();
+    
+    const newContent: Content = { 
+      ...content,
+      id, 
+      likes: 0, 
+      dislikes: 0,
+      year: content.year || null,
+      filePath: content.filePath || null,
+      dueDate: content.dueDate || null,
+      uploadedAt: now 
+    };
+    
+    this.contents.set(id, newContent);
+    return newContent;
+  }
+
+  async updateContentLikes(id: number, likeDelta: number, dislikeDelta: number): Promise<Content> {
+    const content = await this.getContent(id);
+    if (!content) {
+      throw new Error(`Content with id ${id} not found`);
+    }
+
+    const updatedContent = { 
+      ...content, 
+      likes: Math.max(0, content.likes + likeDelta),
+      dislikes: Math.max(0, content.dislikes + dislikeDelta),
+    };
+    
+    this.contents.set(id, updatedContent);
+    return updatedContent;
+  }
+
+  // User-Content relation operations
+  async getUserContent(userId: number, contentId: number): Promise<UserContent | undefined> {
+    const key = `${userId}-${contentId}`;
+    return this.userContents.get(key);
+  }
+
+  async updateUserContent(userId: number, contentId: number, data: Partial<UserContent>): Promise<UserContent> {
+    const key = `${userId}-${contentId}`;
+    const existingRelation = this.userContents.get(key);
+    
+    const updatedRelation: UserContent = existingRelation 
+      ? { ...existingRelation, ...data }
+      : {
+          userId,
+          contentId,
+          isCompleted: data.isCompleted || false,
+          completedAt: data.completedAt,
+          isLiked: data.isLiked || false,
+          isDisliked: data.isDisliked || false,
+        };
+    
+    this.userContents.set(key, updatedRelation);
+    return updatedRelation;
+  }
+
+  // Comment operations
+  async getComments(contentId: number): Promise<(Comment & { user: User })[]> {
+    const comments = Array.from(this.comments.values())
+      .filter(comment => comment.contentId === contentId)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    
+    return Promise.all(comments.map(async (comment) => {
+      const user = await this.getUser(comment.userId);
+      if (!user) {
+        throw new Error(`User with id ${comment.userId} not found`);
+      }
+      return { ...comment, user };
+    }));
+  }
+
+  async createComment(comment: InsertComment): Promise<Comment> {
+    const id = this.commentId++;
+    const now = new Date();
+    
+    const newComment: Comment = { 
+      ...comment, 
+      id, 
+      createdAt: now 
+    };
+    
+    this.comments.set(id, newComment);
+    return newComment;
+  }
+
+  // Leaderboard
+  async getLeaderboard(): Promise<LeaderboardEntry[]> {
+    const users = Array.from(this.users.values());
+    
+    // Get contribution counts for each user
+    const userContributions = users.map(user => {
+      const contributions = Array.from(this.contents.values())
+        .filter(content => content.uploaderId === user.id).length;
+      
+      // Determine badge based on points
+      let badge = "Starlet Scholar";
+      if (user.points > 4000) badge = "Celestial Champion";
+      else if (user.points > 2500) badge = "Phoenix Prodigy";
+      else if (user.points > 1500) badge = "Eternal Guardian";
+      else if (user.points > 1000) badge = "Cosmic Intellect";
+      else if (user.points > 750) badge = "Galactic Sage";
+      else if (user.points > 500) badge = "Truth Hunter";
+      else if (user.points > 300) badge = "Wisdom Weaver";
+      else if (user.points > 150) badge = "Insight Voyager";
+      else if (user.points > 50) badge = "Knowledge Keeper";
+      
+      return {
+        ...user,
+        totalContributions: contributions,
+        badge
+      };
+    });
+    
+    // Sort by points (descending)
+    return userContributions.sort((a, b) => b.points - a.points);
+  }
+  
+  // Dashboard messages
+  async getDashboardMessages(): Promise<DashboardMessage[]> {
+    return Array.from(this.dashboardMessages.values());
+  }
+
+  async createDashboardMessage(message: InsertDashboardMessage): Promise<DashboardMessage> {
+    const id = this.dashboardMessageId++;
+    const now = new Date();
+    
+    const newMessage: DashboardMessage = {
+      id,
+      message: message.message,
+      createdById: message.createdById,
+      isActive: message.isActive !== undefined ? message.isActive : true,
+      createdAt: now,
+      updatedAt: now
+    };
+    
+    this.dashboardMessages.set(id, newMessage);
+    return newMessage;
+  }
+
+  async updateDashboardMessage(id: number, data: Partial<DashboardMessage>): Promise<DashboardMessage> {
+    const message = this.dashboardMessages.get(id);
+    
+    if (!message) {
+      throw new Error(`Dashboard message with id ${id} not found`);
+    }
+    
+    const updatedMessage: DashboardMessage = {
+      ...message,
+      ...data,
+      updatedAt: new Date()
+    };
+    
+    this.dashboardMessages.set(id, updatedMessage);
+    return updatedMessage;
+  }
+}
+
+// Implementation of storage interface using PostgreSQL
+export class DatabaseStorage implements IStorage {
+  public sessionStore: any;
+
+  constructor() {
+    this.sessionStore = new PostgresSessionStore({ 
+      pool, 
+      createTableIfMissing: true
+    });
+  }
+
+  // Utility to determine badge based on points
+  private getBadgeFromPoints(points: number): string {
+    let badge = "Starlet Scholar";
+    if (points > 4000) badge = "Celestial Champion";
+    else if (points > 2500) badge = "Phoenix Prodigy";
+    else if (points > 1500) badge = "Eternal Guardian";
+    else if (points > 1000) badge = "Cosmic Intellect";
+    else if (points > 750) badge = "Galactic Sage";
+    else if (points > 500) badge = "Truth Hunter";
+    else if (points > 300) badge = "Wisdom Weaver";
+    else if (points > 150) badge = "Insight Voyager";
+    else if (points > 50) badge = "Knowledge Keeper";
+    return badge;
+  }
+
+  // User operations
+  async getUser(id: number): Promise<User | undefined> {
+    const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+    return result[0];
+  }
+
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    const result = await db
+      .select()
+      .from(users)
+      .where(sql`LOWER(${users.username}) = LOWER(${username})`)
+      .limit(1);
+    return result[0];
+  }
+
+  async getUserByAdmissionNumber(admissionNumber: string): Promise<User | undefined> {
+    const result = await db
+      .select()
+      .from(users)
+      .where(sql`LOWER(${users.admissionNumber}) = LOWER(${admissionNumber})`)
+      .limit(1);
+    return result[0];
+  }
+
+  async createUser(user: InsertUser): Promise<User> {
+    const inserted = await db.insert(users).values({
+      ...user,
+      points: 0,
+      isAdmin: false,
+      isSuperAdmin: false,
+      lastActiveAt: new Date(),
+    }).returning();
+    return inserted[0];
+  }
+
+  async updateUser(id: number, data: Partial<User>): Promise<User> {
+    const updated = await db
+      .update(users)
+      .set({
+        ...data,
+        lastActiveAt: new Date(),
+      })
+      .where(eq(users.id, id))
+      .returning();
+    
+    if (updated.length === 0) {
+      throw new Error(`User with id ${id} not found`);
+    }
+    return updated[0];
+  }
+
+  async updateUserPoints(id: number, points: number): Promise<User> {
+    const user = await this.getUser(id);
+    if (!user) {
+      throw new Error(`User with id ${id} not found`);
+    }
+
+    const newPoints = Math.max(0, user.points + points);
+    
+    const updated = await db
+      .update(users)
+      .set({ 
+        points: newPoints,
+        lastActiveAt: new Date(),
+      })
+      .where(eq(users.id, id))
+      .returning();
+    
+    return updated[0];
+  }
+
+  async getUserStats(id: number): Promise<UserStats> {
+    const user = await this.getUser(id);
+    if (!user) {
+      throw new Error(`User with id ${id} not found`);
+    }
+
+    // Get user's content count
+    const userContentsCount = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(contents)
+      .where(eq(contents.uploaderId, id));
+    
+    // Get contribution breakdown
+    const assignmentsCount = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(contents)
+      .where(and(
+        eq(contents.uploaderId, id),
+        eq(contents.type, "assignment")
+      ));
+    
+    const notesCount = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(contents)
+      .where(and(
+        eq(contents.uploaderId, id),
+        eq(contents.type, "note")
+      ));
+    
+    const pastPapersCount = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(contents)
+      .where(and(
+        eq(contents.uploaderId, id),
+        eq(contents.type, "past_paper")
+      ));
+
+    // Get user rank
+    const usersRank = await db
+      .select({ 
+        userId: users.id,
+        rank: sql<number>`RANK() OVER (ORDER BY ${users.points} DESC)`
+      })
+      .from(users);
+    
+    const userRank = usersRank.find(u => u.userId === id)?.rank || 0;
+    
+    return {
+      totalPoints: user.points,
+      rank: userRank,
+      badge: this.getBadgeFromPoints(user.points),
+      totalContributions: userContentsCount[0].count,
+      contributionBreakdown: {
+        assignments: assignmentsCount[0].count,
+        notes: notesCount[0].count,
+        pastPapers: pastPapersCount[0].count
+      }
+    };
+  }
+
+  // Academic hierarchy operations
+  async getCountries(): Promise<Country[]> {
+    return await db.select().from(countries);
+  }
+
+  async getCountry(id: number): Promise<Country | undefined> {
+    const result = await db
+      .select()
+      .from(countries)
+      .where(eq(countries.id, id))
+      .limit(1);
+    return result[0];
+  }
+
+  async createCountry(country: InsertCountry): Promise<Country> {
+    const inserted = await db
+      .insert(countries)
+      .values(country)
+      .returning();
+    return inserted[0];
+  }
+
+  async getUniversities(countryId?: number): Promise<University[]> {
+    if (countryId) {
+      return await db
+        .select()
+        .from(universities)
+        .where(eq(universities.countryId, countryId));
+    }
+    return await db.select().from(universities);
+  }
+
+  async getUniversity(id: number): Promise<University | undefined> {
+    const result = await db
+      .select()
+      .from(universities)
+      .where(eq(universities.id, id))
+      .limit(1);
+    return result[0];
+  }
+
+  async createUniversity(university: InsertUniversity): Promise<University> {
+    const inserted = await db
+      .insert(universities)
+      .values(university)
+      .returning();
+    return inserted[0];
+  }
+
+  async getPrograms(universityId?: number): Promise<Program[]> {
+    if (universityId) {
+      return await db
+        .select()
+        .from(programs)
+        .where(eq(programs.universityId, universityId));
+    }
+    return await db.select().from(programs);
+  }
+
+  async getAllPrograms(): Promise<Program[]> {
+    return await db.select().from(programs);
+  }
+
+  async getProgram(id: number): Promise<Program | undefined> {
+    const result = await db
+      .select()
+      .from(programs)
+      .where(eq(programs.id, id))
+      .limit(1);
+    return result[0];
+  }
+
+  async createProgram(program: InsertProgram): Promise<Program> {
+    const inserted = await db
+      .insert(programs)
+      .values(program)
+      .returning();
+    return inserted[0];
+  }
+
+  async getCourses(programId?: number): Promise<Course[]> {
+    if (programId) {
+      return await db
+        .select()
+        .from(courses)
+        .where(eq(courses.programId, programId));
+    }
+    return await db.select().from(courses);
+  }
+
+  async getCourse(id: number): Promise<Course | undefined> {
+    const result = await db
+      .select()
+      .from(courses)
+      .where(eq(courses.id, id))
+      .limit(1);
+    return result[0];
+  }
+
+  async createCourse(course: InsertCourse): Promise<Course> {
+    const inserted = await db
+      .insert(courses)
+      .values(course)
+      .returning();
+    return inserted[0];
+  }
+
+  async getYears(courseId?: number): Promise<Year[]> {
+    if (courseId) {
+      return await db
+        .select()
+        .from(years)
+        .where(eq(years.courseId, courseId));
+    }
+    return await db.select().from(years);
+  }
+
+  async getYear(id: number): Promise<Year | undefined> {
+    const result = await db
+      .select()
+      .from(years)
+      .where(eq(years.id, id))
+      .limit(1);
+    return result[0];
+  }
+
+  async createYear(year: InsertYear): Promise<Year> {
+    const inserted = await db
+      .insert(years)
+      .values(year)
+      .returning();
+    return inserted[0];
+  }
+
+  async getSemesters(yearId?: number): Promise<Semester[]> {
+    if (yearId) {
+      return await db
+        .select()
+        .from(semesters)
+        .where(eq(semesters.yearId, yearId));
+    }
+    return await db.select().from(semesters);
+  }
+
+  async getSemester(id: number): Promise<Semester | undefined> {
+    const result = await db
+      .select()
+      .from(semesters)
+      .where(eq(semesters.id, id))
+      .limit(1);
+    return result[0];
+  }
+
+  async createSemester(semester: InsertSemester): Promise<Semester> {
+    const inserted = await db
+      .insert(semesters)
+      .values(semester)
+      .returning();
+    return inserted[0];
+  }
+
+  async getGroups(semesterId?: number): Promise<Group[]> {
+    if (semesterId) {
+      return await db
+        .select()
+        .from(groups)
+        .where(eq(groups.semesterId, semesterId));
+    }
+    return await db.select().from(groups);
+  }
+
+  async getGroup(id: number): Promise<Group | undefined> {
+    const result = await db
+      .select()
+      .from(groups)
+      .where(eq(groups.id, id))
+      .limit(1);
+    return result[0];
+  }
+
+  async createGroup(group: InsertGroup): Promise<Group> {
+    const inserted = await db
+      .insert(groups)
+      .values(group)
+      .returning();
+    return inserted[0];
+  }
+
+  async getUnits(groupId?: number): Promise<Unit[]> {
+    if (groupId) {
+      return await db
+        .select()
+        .from(units)
+        .where(eq(units.groupId, groupId));
+    }
+    return await db.select().from(units);
+  }
+
+  async getUnit(id: number): Promise<Unit | undefined> {
+    const result = await db
+      .select()
+      .from(units)
+      .where(eq(units.id, id))
+      .limit(1);
+    return result[0];
+  }
+
+  async getUnitsByUser(userId: number): Promise<Unit[]> {
+    const user = await this.getUser(userId);
+    if (!user) {
+      throw new Error(`User with id ${userId} not found`);
+    }
+
+    // Get units for user's group
+    return this.getUnits(user.groupId);
+  }
+
+  async createUnit(unit: InsertUnit): Promise<Unit> {
+    const inserted = await db
+      .insert(units)
+      .values(unit)
+      .returning();
+    return inserted[0];
+  }
+
+  // Content operations
+  async getContents(unitId: number, type?: string): Promise<Content[]> {
+    if (type) {
+      return await db
+        .select()
+        .from(contents)
+        .where(and(
+          eq(contents.unitId, unitId),
+          eq(contents.type, type)
+        ))
+        .orderBy(desc(contents.uploadedAt));
+    }
+    
+    return await db
+      .select()
+      .from(contents)
+      .where(eq(contents.unitId, unitId))
+      .orderBy(desc(contents.uploadedAt));
+  }
+
+  async getContent(id: number): Promise<Content | undefined> {
+    const result = await db
+      .select()
+      .from(contents)
+      .where(eq(contents.id, id))
+      .limit(1);
+    return result[0];
+  }
+
+  async createContent(content: InsertContent): Promise<Content> {
+    const inserted = await db
+      .insert(contents)
+      .values({
+        ...content,
+        likes: 0,
+        dislikes: 0,
+      })
+      .returning();
+    return inserted[0];
+  }
+
+  async updateContentLikes(id: number, likeDelta: number, dislikeDelta: number): Promise<Content> {
+    const content = await this.getContent(id);
+    if (!content) {
+      throw new Error(`Content with id ${id} not found`);
+    }
+
+    const updated = await db
+      .update(contents)
+      .set({
+        likes: Math.max(0, content.likes + likeDelta),
+        dislikes: Math.max(0, content.dislikes + dislikeDelta),
+      })
+      .where(eq(contents.id, id))
+      .returning();
+    
+    return updated[0];
+  }
+
+  // User-Content relation operations
+  async getUserContent(userId: number, contentId: number): Promise<UserContent | undefined> {
+    const result = await db
+      .select()
+      .from(userContents)
+      .where(and(
+        eq(userContents.userId, userId),
+        eq(userContents.contentId, contentId)
+      ))
+      .limit(1);
+    
+    return result[0] as unknown as UserContent;
+  }
+
+  async updateUserContent(userId: number, contentId: number, data: Partial<UserContent>): Promise<UserContent> {
+    const existingRelation = await this.getUserContent(userId, contentId);
+    
+    if (existingRelation) {
+      // Update existing relation
+      const updateData: any = {};
+      
+      // Copy supported fields with proper type conversion
+      if (data.isCompleted !== undefined) updateData.isCompleted = data.isCompleted;
+      if (data.isLiked !== undefined) updateData.isLiked = data.isLiked;
+      if (data.isDisliked !== undefined) updateData.isDisliked = data.isDisliked;
+      
+      // Convert completedAt to Date if needed
+      if (data.completedAt !== undefined) {
+        if (typeof data.completedAt === 'string') {
+          updateData.completedAt = new Date(data.completedAt);
+        } else {
+          updateData.completedAt = data.completedAt;
+        }
+      }
+      
+      const updated = await db
+        .update(userContents)
+        .set(updateData)
+        .where(and(
+          eq(userContents.userId, userId),
+          eq(userContents.contentId, contentId)
+        ))
+        .returning();
+      
+      return updated[0] as unknown as UserContent;
+    } else {
+      // Create new relation
+      const insertData: any = {
+        userId,
+        contentId,
+        isCompleted: data.isCompleted || false,
+        isLiked: data.isLiked || false,
+        isDisliked: data.isDisliked || false,
+      };
+      
+      // Handle date conversion
+      if (data.completedAt !== undefined) {
+        if (typeof data.completedAt === 'string') {
+          insertData.completedAt = new Date(data.completedAt);
+        } else {
+          insertData.completedAt = data.completedAt;
+        }
+      }
+        
+      const inserted = await db
+        .insert(userContents)
+        .values(insertData)
+        .returning();
+      
+      return inserted[0] as unknown as UserContent;
+    }
+  }
+
+  // Comment operations
+  async getComments(contentId: number): Promise<(Comment & { user: User })[]> {
+    const commentsResult = await db
+      .select()
+      .from(comments)
+      .where(eq(comments.contentId, contentId))
+      .orderBy(asc(comments.createdAt));
+    
+    // Fetch user info for each comment
+    const commentsWithUsers = await Promise.all(
+      commentsResult.map(async (comment) => {
+        const user = await this.getUser(comment.userId);
+        if (!user) {
+          throw new Error(`User with id ${comment.userId} not found`);
+        }
+        return { ...comment, user };
+      })
+    );
+    
+    return commentsWithUsers;
+  }
+
+  async createComment(comment: InsertComment): Promise<Comment> {
+    const inserted = await db
+      .insert(comments)
+      .values(comment)
+      .returning();
+    
+    return inserted[0];
+  }
+
+  // Leaderboard
+  async getLeaderboard(): Promise<LeaderboardEntry[]> {
+    // Get all users
+    const allUsers = await db.select().from(users);
+    
+    // For each user, get their contribution count
+    const leaderboardWithContributions = await Promise.all(
+      allUsers.map(async (user) => {
+        const contribCount = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(contents)
+          .where(eq(contents.uploaderId, user.id));
+        
+        return {
+          ...user,
+          totalContributions: contribCount[0].count,
+          badge: this.getBadgeFromPoints(user.points)
+        };
+      })
+    );
+    
+    // Sort by points (descending)
+    return leaderboardWithContributions.sort((a, b) => b.points - a.points);
+  }
+
+  // Dashboard messages
+  async getDashboardMessages(): Promise<DashboardMessage[]> {
+    return await db
+      .select()
+      .from(dashboardMessages)
+      .where(eq(dashboardMessages.isActive, true))
+      .orderBy(desc(dashboardMessages.createdAt));
+  }
+
+  async createDashboardMessage(message: InsertDashboardMessage): Promise<DashboardMessage> {
+    const inserted = await db
+      .insert(dashboardMessages)
+      .values(message)
+      .returning();
+    
+    return inserted[0];
+  }
+
+  async updateDashboardMessage(id: number, data: Partial<DashboardMessage>): Promise<DashboardMessage> {
+    const updated = await db
+      .update(dashboardMessages)
+      .set({
+        ...data,
+        updatedAt: new Date()
+      })
+      .where(eq(dashboardMessages.id, id))
+      .returning();
+    
+    if (updated.length === 0) {
+      throw new Error(`Dashboard message with id ${id} not found`);
+    }
+    
+    return updated[0];
+  }
+}
+
+// Use DatabaseStorage
+export const storage = new DatabaseStorage();
