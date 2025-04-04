@@ -12,7 +12,12 @@
     "declaration": false,
     "sourceMap": false,
     "removeComments": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "exactOptionalPropertyTypes": false,
+    "isolatedModules": false,
+    "noPropertyAccessFromIndexSignature": false
   },
   "include": ["shared/**/*"],
   "exclude": ["node_modules", "dist"]

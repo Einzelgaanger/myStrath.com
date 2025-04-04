@@ -3,9 +3,10 @@ import fs from "fs";
 import path from "path";
 import { createServer as createViteServer, createLogger } from "vite";
 import { type Server } from "http";
-import viteConfig from "../vite.config";
+// Import vite config with proper type handling
+const viteConfig = require("../vite.config").default;
 // Import nanoid with proper type support
-import { nanoid } from "nanoid/async";
+import { nanoid } from "nanoid";
 
 const viteLogger = createLogger();
 

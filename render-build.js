@@ -33,6 +33,11 @@ try {
   if (!fs.existsSync(path.resolve(__dirname, 'dist/server'))) {
     fs.mkdirSync(path.resolve(__dirname, 'dist/server'), { recursive: true });
   }
+  
+  // Create dist/shared directory if it doesn't exist
+  if (!fs.existsSync(path.resolve(__dirname, 'dist/shared'))) {
+    fs.mkdirSync(path.resolve(__dirname, 'dist/shared'), { recursive: true });
+  }
 
   // Step 3: Create a simplified server entry point
   console.log(`${colors.yellow}Creating server entry point...${colors.reset}`);
@@ -44,6 +49,7 @@ import compression from 'compression';
 import helmet from 'helmet';
 import cors from 'cors';
 import { createServer } from 'http';
+import session from 'express-session';
 
 // ES Module equivalent for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -58,7 +64,8 @@ async function startServer() {
     app.use(cors({
       origin: process.env.CORS_ORIGIN || '*',
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization']
+      allowedHeaders: ['Content-Type', 'Authorization'],
+      credentials: true
     }));
 
     // Enable compression
@@ -69,6 +76,18 @@ async function startServer() {
       contentSecurityPolicy: false // Disable CSP for development
     }));
 
+    // Session configuration
+    app.use(session({
+      secret: process.env.SESSION_SECRET || 'development-secret',
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        secure: process.env.NODE_ENV === 'production',
+        httpOnly: true,
+        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+      }
+    }));
+
     // Parse JSON bodies
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
@@ -76,6 +95,15 @@ async function startServer() {
     // Health check endpoint
     app.get("/health", (req, res) => {
       res.json({ status: "ok", timestamp: new Date().toISOString() });
+    });
+
+    // API endpoint for authentication status
+    app.get("/api/auth/status", (req, res) => {
+      if (req.session && req.session.user) {
+        res.json({ authenticated: true, user: req.session.user });
+      } else {
+        res.json({ authenticated: false });
+      }
     });
 
     // Serve static files from the client build directory
@@ -180,6 +208,24 @@ startServer();
     console.log(`${colors.green}index.html created in dist/client${colors.reset}`);
   }
 
+  // Step 6: Create a package.json for production
+  console.log(`${colors.yellow}Creating production package.json...${colors.reset}`);
+  const packageJson = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'));
+  const prodPackageJson = {
+    name: packageJson.name,
+    version: packageJson.version,
+    description: packageJson.description || 'UniSphere - University Learning Platform',
+    engines: packageJson.engines || { node: '>=18.0.0' },
+    type: 'module',
+    dependencies: packageJson.dependencies,
+    scripts: {
+      start: 'node server/index.js'
+    }
+  };
+  
+  fs.writeFileSync(path.resolve(__dirname, 'dist/package.json'), JSON.stringify(prodPackageJson, null, 2));
+  console.log(`${colors.green}Production package.json created successfully!${colors.reset}`);
+  
   console.log(`${colors.green}Render deployment build completed successfully!${colors.reset}`);
 } catch (error) {
   console.error(`${colors.red}Build failed:${colors.reset}`, error);

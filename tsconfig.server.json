@@ -16,6 +16,10 @@
     "removeComments": true,
     "forceConsistentCasingInFileNames": false,
     "noPropertyAccessFromIndexSignature": false,
+    "exactOptionalPropertyTypes": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "isolatedModules": false,
     "paths": {
       "@/*": ["./client/src/*"],
       "@shared/*": ["./shared/*"],
