@@ -136,16 +136,23 @@ export const dashboardMessages = pgTable("dashboard_messages", {
 });
 
 // Zod schemas for validation
-export const insertUserSchema = createInsertSchema(users, {
-  points: z.coerce.number().optional(),
-  createdAt: z.coerce.date().optional(),
-  lastActiveAt: z.coerce.date().optional(),
-  id: z.coerce.number().optional(),
-}).omit({
-  id: true,
-  createdAt: true,
-  lastActiveAt: true,
-  points: true,
+// Create insert schema without the fields we want to omit
+export const insertUserSchema = z.object({
+  username: z.string(),
+  password: z.string(),
+  admissionNumber: z.string(),
+  profilePicture: z.string().nullable().optional(),
+  isAdmin: z.boolean().default(false),
+  isSuperAdmin: z.boolean().default(false),
+  countryId: z.number(),
+  universityId: z.number(),
+  programId: z.number(),
+  courseId: z.number(),
+  yearId: z.number(),
+  semesterId: z.number(),
+  groupId: z.number(),
+  classCode: z.string(),
+  isUsingDefaultPassword: z.boolean().default(true),
 });
 
 export const passwordLoginSchema = z.object({
@@ -163,67 +170,74 @@ export const changePasswordSchema = z.object({
   newPassword: z.string().min(8, "New password must be at least 8 characters"),
 });
 
-export const insertCountrySchema = createInsertSchema(countries, {
-  id: z.coerce.number().optional(),
-}).omit({ id: true });
-
-export const insertUniversitySchema = createInsertSchema(universities, {
-  id: z.coerce.number().optional(),
-}).omit({ id: true });
-
-export const insertProgramSchema = createInsertSchema(programs, {
-  id: z.coerce.number().optional(),
-}).omit({ id: true });
-
-export const insertCourseSchema = createInsertSchema(courses, {
-  id: z.coerce.number().optional(),
-}).omit({ id: true });
-
-export const insertYearSchema = createInsertSchema(years, {
-  id: z.coerce.number().optional(),
-}).omit({ id: true });
-
-export const insertSemesterSchema = createInsertSchema(semesters, {
-  id: z.coerce.number().optional(),
-}).omit({ id: true });
-
-export const insertGroupSchema = createInsertSchema(groups, {
-  id: z.coerce.number().optional(),
-  adminId: z.coerce.number().optional(),
-}).omit({ id: true, adminId: true });
-
-export const insertUnitSchema = createInsertSchema(units, {
-  id: z.coerce.number().optional(),
-}).omit({ id: true });
-
-export const insertContentSchema = createInsertSchema(contents, {
-  id: z.coerce.number().optional(),
-  likes: z.coerce.number().optional(),
-  dislikes: z.coerce.number().optional(),
-  uploadedAt: z.coerce.date().optional(),
-}).omit({ 
-  id: true, 
-  likes: true, 
-  dislikes: true, 
-  uploadedAt: true 
+export const insertCountrySchema = z.object({
+  name: z.string(),
+  code: z.string(),
 });
 
-export const insertCommentSchema = createInsertSchema(comments, {
-  id: z.coerce.number().optional(),
-  createdAt: z.coerce.date().optional(),
-}).omit({
-  id: true,
-  createdAt: true,
+export const insertUniversitySchema = z.object({
+  name: z.string(),
+  code: z.string(),
+  countryId: z.number(),
 });
 
-export const insertDashboardMessageSchema = createInsertSchema(dashboardMessages, {
-  id: z.coerce.number().optional(),
-  createdAt: z.coerce.date().optional(),
-  updatedAt: z.coerce.date().optional(),
-}).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
+export const insertProgramSchema = z.object({
+  name: z.string(),
+  code: z.string(),
+  universityId: z.number(),
+});
+
+export const insertCourseSchema = z.object({
+  name: z.string(),
+  code: z.string(),
+  programId: z.number(),
+});
+
+export const insertYearSchema = z.object({
+  name: z.string(),
+  code: z.string(),
+  courseId: z.number(),
+});
+
+export const insertSemesterSchema = z.object({
+  name: z.string(),
+  code: z.string(),
+  yearId: z.number(),
+});
+
+export const insertGroupSchema = z.object({
+  name: z.string(),
+  code: z.string(),
+  semesterId: z.number(),
+});
+
+export const insertUnitSchema = z.object({
+  name: z.string(),
+  code: z.string(),
+  groupId: z.number(),
+});
+
+export const insertContentSchema = z.object({
+  title: z.string(),
+  description: z.string(),
+  type: z.string(),
+  filePath: z.string().optional(),
+  dueDate: z.date().optional(),
+  year: z.number().optional(),
+  uploaderId: z.number(),
+  unitId: z.number(),
+});
+
+export const insertCommentSchema = z.object({
+  text: z.string(),
+  userId: z.number(),
+  contentId: z.number(),
+});
+
+export const insertDashboardMessageSchema = z.object({
+  message: z.string(),
+  isActive: z.boolean().default(true),
+  createdById: z.number(),
 });
 
 // Export types

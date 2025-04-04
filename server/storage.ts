@@ -11,11 +11,16 @@ import session from "express-session";
 import createMemoryStore from "memorystore";
 import { db, pool } from "./db";
 import { and, eq, desc, asc, sql, gt, lt, gte, lte, isNull, not } from "drizzle-orm";
-import connectPg from "connect-pg-simple";
+import pgConnect from "connect-pg-simple";
 import { hashPassword } from "./auth";
 
 const MemoryStore = createMemoryStore(session);
-const PostgresSessionStore = connectPg(session);
+const PgStore = pgConnect(session);
+// Initialize session store
+export const sessionStore = new PgStore({
+  pool,
+  tableName: "session"
+});
 
 // Define type for user-content relation
 type UserContent = {
@@ -424,8 +429,22 @@ class Storage implements IStorage {
   }
 
   async createContent(content: InsertContent): Promise<Content> {
+    // Ensure all required fields are present
+    if (!content.title || !content.description || !content.type || !content.uploaderId || !content.unitId) {
+      throw new Error('Missing required fields for content creation');
+    }
+    
     const [newContent] = await db.insert(contents)
-      .values(content)
+      .values({
+        title: content.title,
+        description: content.description,
+        type: content.type,
+        filePath: content.filePath,
+        dueDate: content.dueDate,
+        year: content.year,
+        uploaderId: content.uploaderId,
+        unitId: content.unitId
+      })
       .returning();
     return newContent;
   }
@@ -563,15 +582,11 @@ class Storage implements IStorage {
 
   // Leaderboard operations
   async getLeaderboard(): Promise<LeaderboardEntry[]> {
-    const users = await db.query.users.findMany({
-      orderBy: (users, { desc }) => [desc(users.points)]
-    });
+    const usersResult = await db.select().from(users).orderBy(desc(users.points));
 
     const leaderboardEntries = await Promise.all(
-      users.map(async (user) => {
-        const contributions = await db.query.contents.findMany({
-          where: (contents, { eq }) => eq(contents.uploaderId, user.id)
-        });
+      usersResult.map(async (user) => {
+        const contributions = await db.select().from(contents).where(eq(contents.uploaderId, user.id));
 
         let badge = 'Novice';
         if (user.points >= 1000) badge = 'Expert';

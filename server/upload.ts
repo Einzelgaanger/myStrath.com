@@ -412,7 +412,7 @@ export function createWriteStream(filePath: string): fs.WriteStream {
 // Create a read stream with options
 export function createReadStreamWithOptions(
   filePath: string, 
-  options: fs.ReadStreamOptions
+  options: any // Replace ReadStreamOptions with any as it's not exported in fs
 ): fs.ReadStream {
   return fs.createReadStream(filePath, options);
 }
@@ -420,7 +420,7 @@ export function createReadStreamWithOptions(
 // Create a write stream with options
 export function createWriteStreamWithOptions(
   filePath: string, 
-  options: fs.WriteStreamOptions
+  options: any // Replace WriteStreamOptions with any as it's not exported in fs
 ): fs.WriteStream {
   return fs.createWriteStream(filePath, options);
 }
@@ -482,10 +482,7 @@ export function getFileStats(filePath: string): Promise<fs.Stats> {
   });
 }
 
-// Get file stats synchronously
-export function getFileStatsSync(filePath: string): fs.Stats {
-  return fs.statSync(filePath);
-}
+// This duplicate implementation has been removed
 
 // Check if a path is a file
 export function isFile(filePath: string): Promise<boolean> {
@@ -539,11 +536,6 @@ export function isDirectorySync(filePath: string): boolean {
 // Check if a path is a symbolic link synchronously
 export function isSymbolicLinkSync(filePath: string): boolean {
   return fs.lstatSync(filePath).isSymbolicLink();
-}
-
-// Get file stats synchronously
-export function getFileStatsSync(filePath: string): fs.Stats {
-  return fs.statSync(filePath);
 }
 
 // Get file stats asynchronously

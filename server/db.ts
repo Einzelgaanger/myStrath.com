@@ -1,8 +1,8 @@
 import { Pool, PoolConfig } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
-import { logger } from "drizzle-orm";
 import { sql } from "drizzle-orm";
+import * as schema from "@shared/schema";
 
 // Database connection configuration
 const poolConfig: PoolConfig = {
@@ -30,9 +30,10 @@ pool.on("remove", () => {
   console.log("Client removed from the pool");
 });
 
-// Create Drizzle ORM instance
+// Create Drizzle ORM instance with schema
 export const db = drizzle(pool, {
-  logger: process.env.NODE_ENV === "development" ? logger : false,
+  logger: process.env.NODE_ENV === "development",
+  schema
 });
 
 // Run database migrations
